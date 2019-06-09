@@ -6,6 +6,7 @@ The difference of this one are:
 (2) Iterate batch is always a tedious part, and in this code, I use the tensorflow data API to avoid this terrible part.
 Required packages: python 3.7, tensorflow 1.13.0, protobuf 3.8
 """
+
 import tensorflow as tf
 
 class NN (object):
