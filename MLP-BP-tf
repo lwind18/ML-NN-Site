@@ -1,0 +1,73 @@
+"""
+Python code for building multi-layers back propogation neural network!
+I know there are a lot examples online to use MNIST dataset to build neural network.
+The difference of this one are: 
+(1) I use class to packege the whole forward pass and backward pass.
+(2) Iterate batch is always a tedious part, and in this code, I use the tensorflow data API to avoid this terrible part.
+Required packages: python 3.7, tensorflow 1.13.0, protobuf 3.8
+"""
+import tensorflow as tf
+
+class NN (object):
+    # initilize variables (input, hidden1, hidden2, output)
+    def __init__(self, n_inpt, n_outpt, hidden1, hidden2, lr, epoch, batchsize):
+        self.n_inpt = n_inpt
+        self.n_outpt = n_outpt
+        self.hidden1 = hidden1
+        self.hidden2 = hidden2
+        self.lr = lr
+        self.epoch = epoch
+        self.batchsize = batchsize
+
+    def train (self, Xin, Yin):
+        print(Xin.shape)
+        print(Yin.shape)
+        # create a placeholder for input and output data. input data is 28*28, output data is 10 digits
+        x, y = tf.placeholder(tf.float32, [None, self.n_inpt]), tf.placeholder(tf.float32, [None, self.n_outpt])
+        dataset = tf.data.Dataset.from_tensor_slices((x, y)).repeat().batch(self.batchsize)
+        iter = dataset.make_initializable_iterator()
+        x_, y_ = iter.get_next()
+
+        # forward propagation with 2 hidden layers
+        w_1 = tf.Variable(tf.random_normal([self.n_inpt, self.hidden1], stddev=(1/tf.sqrt(float(self.n_inpt)))))
+        b_1 = tf.Variable(tf.random_normal([self.hidden1]))
+        hidden_1 = tf.nn.relu(tf.add(tf.matmul(x_, w_1), b_1))
+        w_2 = tf.Variable(tf.random_normal([self.hidden1, self.hidden2], stddev=(1/tf.sqrt(float(self.hidden1)))))
+        b_2 = tf.Variable(tf.random_normal([self.hidden2]))
+        hidden_2 = tf.nn.relu(tf.add(tf.matmul(hidden_1, w_2), b_2))
+        w_3 = tf.Variable(tf.random_normal([self.hidden2, self.n_outpt],stddev=(1/tf.sqrt(float(self.hidden2)))))
+        b_3 = tf.Variable(tf.random_normal([self.n_outpt]))
+        otp3 = tf.nn.softmax((tf.add(tf.matmul(hidden_2, w_3), b_3)))
+
+        # define cost and optimizer
+        #loss_op = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=output_2, labels=y_))
+        loss_op = tf.losses.mean_squared_error(y_, otp3)
+        optimizer = tf.train.GradientDescentOptimizer(self.lr).minimize(loss_op)
+
+        # define an accuracy assessment operation
+        correct_prediction = tf.equal(tf.argmax(otp3, 1), tf.argmax(y_, 1))
+        accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            sess.run(iter.initializer, feed_dict={x: Xin, y: Yin})
+            total_batch = int(Xin.shape[0] / self.batchsize)
+            print(total_batch)
+            for i in range(self.epoch):
+                avg_cost = 0
+                for _ in range(total_batch):
+                    _, cost = sess.run([optimizer,loss_op])
+                    avg_cost += cost
+                print("Iter: {}, cost = {:.4f}".format(i, avg_cost/total_batch))
+            print(sess.run(accuracy, feed_dict={x: Xin, y: Yin}))
+
+if __name__ == '__main__':
+    # loading the MNIST data
+    from tensorflow.examples.tutorials.mnist import input_data
+    mnist = input_data.read_data_sets("MNIST_data/", one_hot=True)
+    trX, trY, teX, teY = mnist.train.images, mnist.train.labels, mnist.test.images, mnist.test.labels
+    print(trX.shape[0])
+    print(trY.shape[0])
+
+    mnn = NN(784, 10, 300, 200, 0.3, 10, 100)
+    mnn.train(trX, trY)
