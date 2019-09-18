@@ -1,0 +1,213 @@
+"""
+This is the code for building the DBN.
+The idea of building DBN is:
+One, create a class of RBM and set how it update its weight and bias (visible and hidden).Then, using optimized weight and bias to update the net.
+Second, create DBN, which contains pretrain and finetune.
+Pretrain: using RBM class to create rbmlist and weight and bias lists.
+Finetune: using back propagation to tune the neural network.
+Author: Darren
+reference:
+https://blog.csdn.net/qq_23869697/article/details/80738930
+https://github.com/fuzimaoxinan/Tensorflow-Deep-Neural-Networks
+"""
+import math
+import tensorflow as tf
+import numpy as np
+
+# create RBM using CD1
+class RBM (object):
+    def __init__(self, input_size, output_size):
+        # Defining the hyperparameters
+        self._input_size = input_size  # Size of input
+        self._output_size = output_size  # Size of output
+        self.epochs = 5  # Amount of training iterations
+        self.learning_rate = 0.4  # The step used in gradient descent
+        self.batchsize = 100  # The size of how much data will be used for training per sub iteration
+
+        # Initializing weights and biases as matrices full of zeroes
+        self.w = np.zeros([input_size, output_size], np.float32)  # Creates and initializes the weights with 0
+        self.hb = np.zeros([output_size], np.float32)  # Creates and initializes the hidden biases with 0
+        self.vb = np.zeros([input_size], np.float32)  # Creates and initializes the visible biases with 0
+
+    # Fits the result from the weighted visible layer plus the bias into a sigmoid curve
+    def transform (self, visible, w, hb):
+        h_prob = tf.nn.sigmoid(tf.matmul(visible, w) + hb)
+        h_samp = tf.nn.relu(tf.sign(h_prob - tf.random_uniform(tf.shape(h_prob))))
+        return h_samp
+
+    def reconstruction (self, hidden, w, vb):
+        v_prob = tf.nn.sigmoid(tf.matmul(hidden, tf.transpose(w)) + vb)
+        v_samp = tf.nn.relu(tf.sign(v_prob - tf.random_uniform(tf.shape(v_prob))))
+        return v_samp
+
+    # Training the RBM using CD1 algorithm
+    def train(self, X):
+        # Create the placeholders for our parameters
+        v0 = tf.placeholder("float", [None, self._input_size])
+        _w = tf.placeholder("float", [self._input_size, self._output_size])
+        _hb = tf.placeholder("float", [self._output_size])
+        _vb = tf.placeholder("float", [self._input_size])
+
+        # Initialize with sample probabilities
+        h0 = self.transform(v0, _w, _hb)
+        v1 = self.reconstruction(h0, _w, _vb)
+        h1 = self.transform(v1, _w, _hb)
+
+        # Create the Gradients and update w, hb, and vb using CD1 and learning_rate
+        positive_grad = tf.matmul(tf.transpose(v0), h0)
+        negative_grad = tf.matmul(tf.transpose(v1), h1)
+
+        update_w = _w + self.learning_rate * (positive_grad - negative_grad) / tf.to_float(tf.shape(v0)[0])
+        update_vb = _vb + self.learning_rate * tf.reduce_mean(v0 - v1, 0)
+        update_hb = _hb + self.learning_rate * tf.reduce_mean(h0 - h1, 0)
+
+        # Find the error rate
+        #err = tf.reduce_mean(tf.square(v0 - v1))
+        err = -tf.reduce_mean(v0 * tf.log(tf.clip_by_value(v1, 1e-10, 1.0)))
+
+        # initialize current and previous w, hb, and vb
+        prv_w = np.zeros([self._input_size, self._output_size], np.float32)  # Creates and initializes the weights with 0
+        prv_hb = np.zeros([self._output_size], np.float32)  # Creates and initializes the hidden biases with 0
+        prv_vb = np.zeros([self._input_size], np.float32)  # Creates and initializes the visible biases with 0
+
+        cur_w = np.zeros([self._input_size, self._output_size], np.float32)
+        cur_hb = np.zeros([self._output_size], np.float32)
+        cur_vb = np.zeros([self._input_size], np.float32)
+
+        # Training one loop with epoches
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            # For each epoch
+            for epoch in range(self.epochs):
+                # For each step/batch
+                for start, end in zip(range(0, len(X), self.batchsize), range(self.batchsize, len(X), self.batchsize)):
+                    batch = X[start:end]
+                    # Update the rates
+                    cur_w = sess.run(update_w, feed_dict={v0: batch, _w: prv_w, _hb: prv_hb, _vb: prv_vb})
+                    cur_hb = sess.run(update_hb, feed_dict={v0: batch, _w: prv_w, _hb: prv_hb, _vb: prv_vb})
+                    cur_vb = sess.run(update_vb, feed_dict={v0: batch, _w: prv_w, _hb: prv_hb, _vb: prv_vb})
+                    prv_w = cur_w
+                    prv_hb = cur_hb
+                    prv_vb = cur_vb
+                error = sess.run(err, feed_dict={v0: X, _w: cur_w, _vb: cur_vb, _hb: cur_hb})
+                print('Epoch: %d' % epoch, 'reconstruction error: %f' % error)
+            self.w = prv_w
+            self.hb = prv_hb
+            self.vb = prv_vb
+
+    # Create expected output for each RBM and make it greedy tranform to the next RBM
+    def trainedRBM (self, X):
+        input_X = tf.constant(X)
+        _w = tf.constant(self.w)
+        _hb = tf.constant(self.hb)
+        out = tf.nn.sigmoid(tf.matmul(input_X, _w) + _hb)
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            return sess.run(out)
+
+"""
+In DBN, there are two steps. 
+Fist, pretrain, which means use input, hidden layers and output to train each RBM (visible and hidden). 
+I can create a list to hold each input RBM and trained RBM. 
+Second, finetune, which means using trained each layer (input, hiddens, output) to do normal neural network
+"""
+
+class DBN (object):
+    # the size is how many hidden layers and the number of each hidden layer
+    def __init__(self, size, X, Y, learning_rate, epoches, batchsize):
+        self.size = size
+        self.X = X
+        self.Y = Y
+        self.learning_rate = learning_rate
+        self.epoches = epoches
+        self.batchsize = batchsize
+
+    # I create a list of RBMs and use function train in class RBM to train each RBM
+    # self._size = [500, 300, 200]
+    # In this pretrain, using X and size to build RBM and get the trained RBM (not including output)
+    def pretrain (self):
+        inpX = self.X
+        self.rbm_list = []
+        self.w_list = []
+        self.b_list = []
+        input_size = self.X.shape[1]
+
+        for net, size in enumerate(self.size):
+            print('RBM: ', net, '', input_size, '->', size)
+            self.rbm_list.append(RBM(input_size, size))
+            input_size = size
+
+        for rbm in self.rbm_list:
+            print('New RBM:')
+            rbm.train(inpX)  # train a new one
+            inpX = rbm.trainedRBM(inpX)   # return the output layer
+
+        for size in self.size + [self.Y.shape[1]]:
+            #Define upper limit for the uniform distribution range
+            max_range = 4 * math.sqrt(6. / (input_size + size))
+            #Initialize weights  and bias
+            self.w_list.append(np.random.uniform( -max_range, max_range, [input_size, size]).astype(np.float32))
+            self.b_list.append(np.zeros([size], np.float32))
+            input_size = size
+        # connect weight and bias with rbm_list
+        for i in range(len(self.size)):
+            self.w_list[i] = self.rbm_list[i].w
+            self.b_list[i] = self.rbm_list[i].hb
+
+    # using RBMs to create NN and use back propagation to train the model
+    # put the output into the list
+    def finetune(self):
+        # create viriable list [None, None, None, None, None]
+        _a = [None] * (len(self.size) + 2)
+        _w = [None] * (len(self.size) + 1)
+        _b = [None] * (len(self.size) + 1)
+
+        # create placeholder for input, weights, biases, output
+        _a[0] = tf.placeholder("float", [None, self.X.shape[1]])
+        y = tf.placeholder("float", [None, self.Y.shape[1]])
+
+        for i in range(len(self.size) + 1):
+            _w[i] = tf.Variable(self.w_list[i])
+            _b[i] = tf.Variable(self.b_list[i])
+        for i in range(1, len(self.size) + 2):
+            _a[i] = tf.nn.sigmoid(tf.matmul(_a[i - 1], _w[i - 1]) + _b[i - 1])
+
+        # define the cost function
+        cost = tf.reduce_mean(tf.square(_a[-1] - y))
+
+        # define the training operation
+        # train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(cost)
+        train_op = tf.compat.v1.train.GradientDescentOptimizer(self.learning_rate).minimize(cost)
+
+        # test the accuracy
+        correct_prediction = tf.equal(tf.argmax(_a[-1], 1), tf.argmax(y, 1))
+        accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+
+        # training loop
+        with tf.Session() as sess:
+            # Initialize Variables
+            sess.run(tf.global_variables_initializer())
+            # For each epoch
+            for i in range(self.epoches):
+                # For each step
+                for start, end in zip(range(0, len(self.X), self.batchsize),
+                                      range(self.batchsize, len(self.X), self.batchsize)):
+                    # Run the training operation on the input data
+                    sess.run(train_op, feed_dict={_a[0]: self.X[start:end], y: self.Y[start:end]})
+
+                for j in range(len(self.size) + 1):
+                    # Retrieve weights and biases
+                    self.w_list[j] = sess.run(_w[j])
+                    self.b_list[j] = sess.run(_b[j])
+                print('Epoch: %d' % i,'Accuracy: %f' % sess.run(accuracy, feed_dict={_a[0]: self.X, y: self.Y}))
+
+if __name__ == '__main__':
+    # loading the MNIST data
+    from tensorflow.examples.tutorials.mnist import input_data
+    mnist = input_data.read_data_sets("MNIST_data/", one_hot= True)
+    trX, trY, teX, teY = mnist.train.images, mnist.train.labels, mnist.test.images,mnist.test.labels
+
+    RBM_hidden_size = [500, 300, 200] # create 4 layers of RBM with size 785-500-300-200
+    nNet = DBN(RBM_hidden_size, trX, trY, 0.6, 10, 100)
+    nNet.pretrain()
+    nNet.finetune()
